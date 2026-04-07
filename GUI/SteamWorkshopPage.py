@@ -1,5 +1,6 @@
 import os
 import logging
+import shutil
 from typing import List, Dict
 from PyQt5.QtCore import pyqtSignal, QThread, Qt, QTimer
 from PyQt5.QtWidgets import (
@@ -65,7 +66,10 @@ class BatchExtractionThread(QThread):
         super().__init__()
         self.selected_items = selected_items
         self.output_base_dir = output_base_dir
-        
+        self.success_count = 0
+        self.failure_count = 0
+        self.failed_files = []
+
     def run(self):
         try:
             from Core.lpk_loader import LpkLoader
@@ -88,10 +92,23 @@ class BatchExtractionThread(QThread):
                     try:
                         loader = LpkLoader(lpk_file, config_file)
                         loader.extract(item_output_dir)
+                        self.success_count += 1
                     except Exception as e:
                         logging.error(f"Failed to extract {lpk_file}: {e}")
+                        self.failure_count += 1
+                        self.failed_files.append({
+                            'name': os.path.basename(lpk_file),
+                            'error': str(e)
+                        })
                         continue
-            
+
+                # clean up empty directories created by error unpacking
+                try:
+                    if os.path.exists(item_output_dir) and not os.listdir(item_output_dir):
+                        shutil.rmtree(item_output_dir, ignore_errors=True)
+                except Exception as e:
+                    logging.error(f"Failed to clean up empty directories created by error unpacking: {e}")
+
             self.progressUpdated.emit(100, tr("steam.progress_completed"))
             self.extractionFinished.emit()
             
@@ -545,17 +562,48 @@ class SteamWorkshopPage(QFrame):
         self.progress_bar.setVisible(False)
         self.extract_selected_btn.setEnabled(True)
         self.status_label.setText(tr("steam.status_extraction_completed"))
-        
-        InfoBar.success(
-            title=tr("common.success"),
-            content=tr("steam.success_extract_content"),
-            orient=Qt.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=3000,
-            parent=self
-        )
-    
+
+        # 获取统计信息
+        success = self.extraction_thread.success_count
+        failed = self.extraction_thread.failure_count
+        failed_files = self.extraction_thread.failed_files
+        total = success + failed
+
+        logging.info("-" * 50)
+        logging.info(f"解包统计summary:")
+        logging.info(f"总文件数total: {total}")
+        logging.info(f"成功success: {success}")
+        logging.info(f"失败failed: {failed}")
+
+        error_file = ""
+        if failed > 0 and failed_files:
+            logging.info("失败文件列表:")
+            for i, fail in enumerate(failed_files, 1):
+                error_file = error_file + f"{i}. {fail['name']} - {fail['error']}\n"
+                logging.info(f"{i}. {fail['name']} - {fail['error']}")
+        logging.info("-" * 50)
+
+        if failed == 0:
+            InfoBar.success(
+                title=tr("common.success"),
+                content=tr("steam.success_extract_content"),
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+                parent=self
+            )
+        else:
+            InfoBar.warning(
+                title="部分解包完成·Partial success",
+                content=f"{success}/{total} 个成功·success，{failed} 个失败·failed\n" + error_file,
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=10000,
+                parent=self
+            )
+
     def on_extraction_error(self, error_message: str):
         """Handle extraction error"""
         self.progress_bar.setVisible(False)

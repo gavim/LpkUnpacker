@@ -12,7 +12,7 @@ def hashed_filename(s: str) -> str:
 
 def normalize(s: str) -> str:
     s = ''.join(c for c in s if ord(c) >= 32 or c == ' ')
-    s = re.sub(r'[<>:"|?*]', '', s)
+    s = re.sub(r'[\\/<>:"|?*]', '', s)
     if not s.strip():
         s = "unnamed"
     return s
